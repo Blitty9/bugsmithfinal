@@ -86,6 +86,12 @@ export async function POST(request: NextRequest) {
       let repoPath: string;
       try {
         repoPath = await cloneRepo(repo);
+      } catch (error: any) {
+        return NextResponse.json(
+          { error: `Failed to clone repository: ${error.message}` },
+          { status: 500 }
+        );
+      }
 
       // Create branch for the fix
       try {
