@@ -1,0 +1,72 @@
+import "@/lib/loadEnv";
+
+export const runtime = "nodejs";
+
+import { NextRequest, NextResponse } from "next/server";
+import { cloneRepo } from "@/lib/git/cloneRepo";
+import { createBranch } from "@/lib/git/createBranch";
+
+interface PrepareRepoRequest {
+  repo: string;
+  issueNumber: number;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: PrepareRepoRequest = await request.json();
+    const { repo, issueNumber } = body;
+
+    // Validate required fields
+    if (!repo || !issueNumber) {
+      return NextResponse.json(
+        { error: "Missing required fields: repo and issueNumber are required" },
+        { status: 400 }
+      );
+    }
+
+    // Validate repo format
+    const repoParts = repo.split("/");
+    if (repoParts.length !== 2 || !repoParts[0] || !repoParts[1]) {
+      return NextResponse.json(
+        { error: "Invalid repository format. Use owner/repo (e.g., vercel/next.js)" },
+        { status: 400 }
+      );
+    }
+
+    // Clone or update the repository
+    let repoPath: string;
+    try {
+      repoPath = await cloneRepo(repo);
+    } catch (error: any) {
+      return NextResponse.json(
+        { error: `Failed to clone repository: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    // Create branch for the fix
+    const branchName = `bugsmith-fix-${issueNumber}`;
+    try {
+      await createBranch(repoPath, branchName);
+    } catch (error: any) {
+      return NextResponse.json(
+        { error: `Failed to create branch: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    // Return success with repo path and branch name
+    return NextResponse.json({
+      repoPath,
+      branchName,
+      success: true,
+    });
+  } catch (error: any) {
+    console.error("Error preparing repository:", error);
+    return NextResponse.json(
+      { error: `Failed to prepare repository: ${error.message || "Unknown error"}` },
+      { status: 500 }
+    );
+  }
+}
+
