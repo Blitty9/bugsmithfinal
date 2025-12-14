@@ -12,6 +12,7 @@ interface GeneratePatchParams {
   repoPath: string;
   issue: Issue;
   files: string[];
+  repo?: string; // Repository in format "owner/repo" for serverless mode
 }
 
 /**
@@ -185,7 +186,7 @@ function injectHunkLineNumbers(patch: string, repoPath: string): string {
 /**
  * Enforces unified diff format and prevents hallucinated patches.
  */
-export async function generatePatch({ repoPath, issue, files }: GeneratePatchParams): Promise<string> {
+export async function generatePatch({ repoPath, issue, files, repo }: GeneratePatchParams): Promise<string> {
   let fullPrompt = `
 You are a patch generator. You output ONLY unified diff patches that apply cleanly using "git apply".
 
@@ -275,19 +276,11 @@ Now here are the ACTUAL FILE CONTENTS. Use these EXACT contents when generating 
   for (const file of files) {
     let content: string;
     
-    if (isServerless) {
+    if (isServerless && repo) {
       // In serverless, get file content from GitHub API
       try {
         const { getFileContent } = await import("@/lib/github/apiOperations");
-        // Extract repo from repoPath (format: /tmp/bugsmith/owner-repo)
-        const repoMatch = repoPath.match(/bugsmith[\/\\]([^\/\\]+)$/);
-        if (repoMatch) {
-          const repo = repoMatch[1].replace("-", "/");
-          content = await getFileContent(repo, file, "main");
-        } else {
-          // Fallback: try to extract from issue or use empty
-          content = "";
-        }
+        content = await getFileContent(repo, file, "main");
       } catch (error) {
         console.error(`Failed to fetch ${file} from GitHub:`, error);
         content = "";

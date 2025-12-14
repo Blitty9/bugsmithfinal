@@ -175,6 +175,7 @@ export async function POST(request: NextRequest) {
         repoPath,
         issue: issue as any,
         files: relevantFiles,
+        repo: isServerless ? repo : undefined,
       });
     } catch (error: any) {
       console.error("Error generating patch:", error);
