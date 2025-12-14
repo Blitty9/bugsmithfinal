@@ -7,6 +7,7 @@ import { generatePatch } from "@/lib/ai/generatePatch";
 import { applyPatch } from "@/lib/git/applyPatch";
 import { commitChanges } from "@/lib/git/commitChanges";
 import { pushBranch } from "@/lib/git/pushBranch";
+import { applyPatchViaAPI, createBranch as createBranchViaAPI, getFiles } from "@/lib/github/apiOperations";
 import { readdirSync, statSync } from "fs";
 import { join, resolve, relative } from "path";
 
@@ -119,20 +120,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check if we're in a serverless environment
+    const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
     // Step 1: Identify relevant files
     console.log(`Finding relevant files for issue #${issue.number || issue.id}...`);
-    const relevantFiles = await findRelevantFiles(repoPath);
+    let relevantFiles: string[];
     
-    if (relevantFiles.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: "No relevant code files found in repository",
-        patch: undefined,
-        modifiedFiles: [],
-        commitHash: undefined,
-      }, {
-        headers: { "Content-Type": "application/json" },
-      });
+    if (isServerless) {
+      // In serverless, we can't scan the file system
+      // Use a default set of common files or get from GitHub API
+      // For now, use common file patterns
+      relevantFiles = [
+        "src/index.js",
+        "src/index.ts",
+        "index.js",
+        "index.ts",
+        "app.js",
+        "app.ts",
+        "main.js",
+        "main.ts",
+      ];
+      console.log(`Serverless mode: Using default file list`);
+    } else {
+      relevantFiles = await findRelevantFiles(repoPath);
+      
+      if (relevantFiles.length === 0) {
+        return NextResponse.json({
+          success: false,
+          error: "No relevant code files found in repository",
+          patch: undefined,
+          modifiedFiles: [],
+          commitHash: undefined,
+        }, {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
     console.log(`Found ${relevantFiles.length} relevant files: ${relevantFiles.join(", ")}`);
@@ -193,7 +216,42 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Apply patch
     console.log(`Applying patch...`);
-    const patchResult = await applyPatch(repoPath, patch);
+    let patchResult: {
+      success: boolean;
+      modifiedFiles: string[];
+      error?: string;
+      commitHash?: string;
+    };
+    
+    if (isServerless) {
+      // Use GitHub API to apply patch
+      console.log(`Serverless mode: Applying patch via GitHub API...`);
+      
+      // Ensure branch exists
+      const branchResult = await createBranchViaAPI(repo, branchName);
+      if (!branchResult.success && !branchResult.error?.includes("already exists")) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Failed to create branch: ${branchResult.error}`,
+            patch,
+            modifiedFiles: [],
+            commitHash: undefined,
+          },
+          { status: 500 }
+        );
+      }
+
+      patchResult = await applyPatchViaAPI(repo, patch, branchName, issue.number || issue.id);
+    } else {
+      // Use Git commands
+      const gitResult = await applyPatch(repoPath, patch);
+      patchResult = {
+        success: gitResult.success,
+        modifiedFiles: gitResult.modifiedFiles,
+        error: gitResult.error,
+      };
+    }
 
     if (!patchResult.success) {
       return NextResponse.json(
@@ -221,50 +279,65 @@ export async function POST(request: NextRequest) {
 
     console.log(`Modified files: ${patchResult.modifiedFiles.join(", ")}`);
 
-    // Step 4: Commit changes
-    console.log(`Committing changes for issue #${issue.number || issue.id}...`);
-    const commitResult = await commitChanges(repoPath, issue.number || issue.id);
+    // Step 4 & 5: Commit and push (handled by GitHub API in serverless, or Git commands locally)
+    if (isServerless) {
+      // GitHub API already committed the changes when updating files
+      // Return success
+      return NextResponse.json({
+        success: true,
+        patch,
+        modifiedFiles: patchResult.modifiedFiles,
+        commitHash: patchResult.commitHash,
+        pushed: true,
+        message: `Successfully generated patch, applied changes, and committed to ${branchName} via GitHub API`,
+      });
+    } else {
+      // Use Git commands
+      // Step 4: Commit changes
+      console.log(`Committing changes for issue #${issue.number || issue.id}...`);
+      const commitResult = await commitChanges(repoPath, issue.number || issue.id);
 
-    if (!commitResult.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Failed to commit changes: ${commitResult.message}`,
-          patch,
-          modifiedFiles: patchResult.modifiedFiles,
-          commitHash: undefined,
-        },
-        { status: 500 }
-      );
+      if (!commitResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Failed to commit changes: ${commitResult.message}`,
+            patch,
+            modifiedFiles: patchResult.modifiedFiles,
+            commitHash: undefined,
+          },
+          { status: 500 }
+        );
+      }
+
+      // Step 5: Push branch
+      console.log(`Pushing branch ${branchName}...`);
+      const pushResult = await pushBranch(repoPath, branchName);
+
+      if (!pushResult.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Failed to push branch: ${pushResult.message}`,
+            patch,
+            modifiedFiles: patchResult.modifiedFiles,
+            commitHash: commitResult.commitHash,
+            pushed: false,
+          },
+          { status: 500 }
+        );
+      }
+
+      // Return success
+      return NextResponse.json({
+        success: true,
+        patch,
+        modifiedFiles: patchResult.modifiedFiles,
+        commitHash: commitResult.commitHash,
+        pushed: true,
+        message: `Successfully generated patch, applied changes, committed, and pushed to ${branchName}`,
+      });
     }
-
-    // Step 5: Push branch
-    console.log(`Pushing branch ${branchName}...`);
-    const pushResult = await pushBranch(repoPath, branchName);
-
-    if (!pushResult.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Failed to push branch: ${pushResult.message}`,
-          patch,
-          modifiedFiles: patchResult.modifiedFiles,
-          commitHash: commitResult.commitHash,
-          pushed: false,
-        },
-        { status: 500 }
-      );
-    }
-
-    // Return success
-    return NextResponse.json({
-      success: true,
-      patch,
-      modifiedFiles: patchResult.modifiedFiles,
-      commitHash: commitResult.commitHash,
-      pushed: true,
-      message: `Successfully generated patch, applied changes, committed, and pushed to ${branchName}`,
-    });
   } catch (error: any) {
     console.error("Error applying fix:", error);
     const errorMessage = error.message || "Unknown error";
