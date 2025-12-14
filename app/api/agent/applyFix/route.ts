@@ -22,6 +22,9 @@ interface ApplyFixRequest {
     labels?: string[];
     body?: string;
   };
+  preview?: boolean;
+  regenerate?: boolean;
+  useFuzzy?: boolean;
 }
 
 /**
