@@ -175,7 +175,7 @@ export function ThoughtPanel({ thought, className, onToggleCollapse }: ThoughtPa
       
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
-        {thought ? (
+          {thought ? (
           <div className="fade-in space-y-3">
             {codeParts.length > 1 ? (
               // Render with code blocks
@@ -324,18 +324,18 @@ export function ThoughtPanel({ thought, className, onToggleCollapse }: ThoughtPa
                 );
               })
             )}
-          </div>
-        ) : (
+            </div>
+          ) : (
           <div className="flex flex-col items-center justify-center h-full py-8 text-center">
             <div className="h-10 w-10 rounded-full bg-[#7aa2f7]/10 flex items-center justify-center mb-3">
               <Brain className="h-4 w-4 text-[#7aa2f7] animate-pulse" />
-            </div>
+              </div>
             <p className="text-xs text-foreground-muted">
               Waiting for reasoning...
             </p>
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
     </div>
   );
 }
